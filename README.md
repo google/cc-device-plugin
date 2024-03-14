@@ -22,8 +22,7 @@ kubectl create -f manifests/cc-device-plugin.yaml
 ```
 or directly pull from the web using
 ```
-kubectl create -f
-https://raw.githubusercontent.com/google/cc-device-plugin/main/manifests/cc-device-plugin.yaml
+kubectl create -f https://raw.githubusercontent.com/google/cc-device-plugin/main/manifests/cc-device-plugin.yaml
 ```
 
 [dp]: https://kubernetes.io/docs/concepts/cluster-administration/device-plugins/
