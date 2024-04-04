@@ -6,7 +6,7 @@ This is a [Kubernetes][k8s] [device plugin][dp] implementation that enables the
 registration of Confidential Computing devices in a Google
 Kubernetes Engine (GKE) for compute workload. With the appropriate GKE setup and
 this plugin deployed in your Kubernetes cluster, you will be able to run jobs
-(e.g. Attestation) that require Confidential Computing devices. (Note that: Current version supports [TPM][tpm]. Support for [SEV][sev] and [TDX][tdx] are on the way.)
+(e.g. Attestation) that require Confidential Computing devices. (Note that: Current version supports [TPM][tpm]. Support for [SEV SNP][sevsnp] and [TDX][tdx] are on the way.)
 
 ## Prerequisites
 * GKE
@@ -28,6 +28,6 @@ kubectl create -f https://raw.githubusercontent.com/google/cc-device-plugin/main
 [dp]: https://kubernetes.io/docs/concepts/cluster-administration/device-plugins/
 [k8s]: https://kubernetes.io
 [tpm]: https://cloud.google.com/compute/shielded-vm/docs/shielded-vm#vtpm
-[sev]: https://cloud.google.com/confidential-computing/confidential-vm/docs/confidential-vm-overview#amd_sev
+[sevsnp]: https://cloud.google.com/confidential-computing/confidential-vm/docs/confidential-vm-overview#amd_sev-snp
 [tdx]: https://cloud.google.com/blog/products/identity-security/confidential-vms-on-intel-cpus-your-datas-new-intelligent-defense
 [release]: https://us-central1-docker.pkg.dev/gce-confidential-compute/release/cc-device-plugin
