@@ -32,7 +32,7 @@ spec:
         image: nginx
         ports:
         - containerPort: 8080
-        name: http
+          name: http
         resources:
           limits:
-            google.com/cc: 1
+            google.com/cc: "1"

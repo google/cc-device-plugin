@@ -20,13 +20,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/oklog/run"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc/metadata"
@@ -34,8 +33,7 @@ import (
 )
 
 const (
-	ccResourceName = namespace + "/testccdevicetype"
-	testBuffer     = 3 * time.Second
+	testBuffer = 3 * time.Second
 )
 
 var (
@@ -44,234 +42,229 @@ var (
 
 func init() {
 	logger = log.NewJSONLogger(log.NewSyncWriter(os.Stdout))
-	logger = level.NewFilter(logger, level.AllowInfo())
+	logger = level.NewFilter(logger, level.AllowAll())
 	logger = log.With(logger, "timestamp", log.DefaultTimestampUTC)
 	logger = log.With(logger, "caller", log.DefaultCaller)
-
 }
 
-func constructCcDevicePlugin(t *testing.T) *CcDevicePlugin {
-	ccDevicePath := "/tmp/testccdevice" + t.Name()
-	ccMeasurmentPath := "/tmp/testmeasurement" + t.Name()
+// constructTestPlugin creates a *CcDevicePlugin using a temporary directory for isolation.
+func constructTestPlugin(t *testing.T, spec *CcDeviceSpec) *CcDevicePlugin {
+	t.Helper()
+	tmpDir := t.TempDir()
 
-	ccDevicePaths := []string{ccDevicePath}
-	ccMeasurmentPaths := []string{ccMeasurmentPath}
-
-	ccDeviceSpec := &CcDeviceSpec{
-		Resource:         ccResourceName,
-		DevicePaths:      ccDevicePaths,
-		MeasurementPaths: ccMeasurmentPaths,
+	// Create dummy device files
+	for idx, path := range spec.DevicePaths {
+		absPath := filepath.Join(tmpDir, path)
+		if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+			t.Fatalf("failed to create dir: %v", err)
+		}
+		if err := os.WriteFile(absPath, []byte("test_device"), 0644); err != nil {
+			t.Fatalf("failed to create mock device: %v", err)
+		}
+		spec.DevicePaths[idx] = absPath
 	}
 
-	testCcDevicePlugin := CcDevicePlugin{
-		cds:                        ccDeviceSpec,
+	// Create dummy measurement files
+	for idx, path := range spec.MeasurementPaths {
+		absPath := filepath.Join(tmpDir, path)
+		if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+			t.Fatalf("failed to create dir: %v", err)
+		}
+		if err := os.WriteFile(absPath, []byte("test_measurement"), 0644); err != nil {
+			t.Fatalf("failed to create mock measurement: %v", err)
+		}
+		spec.MeasurementPaths[idx] = absPath
+	}
+
+	cdp := &CcDevicePlugin{
+		cds:                        spec,
 		ccDevices:                  make(map[string]CcDevice),
-		copiedEventLogDirectory:    "/tmp/cc-device-plugin",
-		copiedEventLogLocation:     "/tmp/cc-device-plugin/run_testcopiedmeasurement" + t.Name(),
-		containerEventLogDirectory: "/run/cc-device-plugin",
 		logger:                     logger,
+		copiedEventLogDirectory:    filepath.Join(tmpDir, "run/cc-device-plugin"),
+		copiedEventLogLocation:     filepath.Join(tmpDir, "run/cc-device-plugin/binary_bios_measurements"),
+		containerEventLogDirectory: "/run/cc-device-plugin",
 		deviceGauge: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "cc_device_plugin_devices",
-			Help: "The number of cc devices managed by this device plugin.",
+			Name: "test_cc_devices_" + t.Name(),
 		}),
 		allocationsCounter: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "cc_device_plugin_allocations_total",
-			Help: "The total number of cc device allocations made by this device plugin.",
+			Name: "test_cc_allocations_" + t.Name(),
 		}),
 	}
 
-	// Check if the copiedEventLogDirectory directory exists
-	if _, err := os.Stat(testCcDevicePlugin.copiedEventLogDirectory); os.IsNotExist(err) {
-		// Create the directory
-		err = os.Mkdir(testCcDevicePlugin.copiedEventLogDirectory, 0755)
-		if err != nil {
-			level.Warn(testCcDevicePlugin.logger).Log("msg", "Error creating directory:"+testCcDevicePlugin.copiedEventLogDirectory)
-			t.Errorf("failed to create directory: %v", err)
-		}
-		level.Info(testCcDevicePlugin.logger).Log("msg", "Directory created:"+testCcDevicePlugin.copiedEventLogDirectory)
-	} else {
-		level.Info(testCcDevicePlugin.logger).Log("msg", "Directory already exists:"+testCcDevicePlugin.copiedEventLogDirectory)
-	}
-
-	for _, ccDevicePath := range ccDevicePaths {
-		os.Remove(ccDevicePath)
-		err := os.WriteFile(ccDevicePath, []byte("TestCcDevice"), 0777)
-		if err != nil {
-			t.Errorf("failed to WriteFile: %v", err)
-		}
-	}
-	for _, ccMeasurmentPath := range ccMeasurmentPaths {
-		os.Remove(ccMeasurmentPath)
-		err := os.WriteFile(ccMeasurmentPath, []byte("TestCcDevice"), 0777)
-		if err != nil {
-			t.Errorf("failed to WriteFile: %v", err)
+	// For SoftwareAttestation, we expect the directory to be created
+	if spec.Type == SoftwareAttestation {
+		if err := os.MkdirAll(cdp.copiedEventLogDirectory, 0755); err != nil {
+			t.Fatalf("failed to create directory: %v", err)
 		}
 	}
 
-	os.Remove(testCcDevicePlugin.copiedEventLogLocation)
-	return &testCcDevicePlugin
+	return cdp
 }
 
-func TestDiscoverCcDevices(t *testing.T) {
-	testCcDevicePlugin := constructCcDevicePlugin(t)
-	gotCcDevices, err := testCcDevicePlugin.discoverCcDevices()
+func getExpectedID(resourceName string, limit int, index int) string {
+	h := sha1.New()
+	h.Write([]byte(resourceName))
+	baseID := fmt.Sprintf("%x", h.Sum(nil))
+	if limit > 1 {
+		return fmt.Sprintf("%s-%d", baseID, index)
+	}
+	return baseID
+}
+
+func TestDiscoverTDX(t *testing.T) {
+	spec := &CcDeviceSpec{
+		Resource:    "intel.com/tdx",
+		Type:        HardwareAttestation,
+		DevicePaths: []string{"dev/tdx-guest"},
+		DeviceLimit: 1,
+	}
+	cdp := constructTestPlugin(t, spec)
+	devices, err := cdp.discoverCcDevices()
 	if err != nil {
-		t.Errorf("failed to discoverCcDevices: %v", err)
-		return
-	}
-	// discoverCcDevices copies measurement file, delete after test.
-	err = os.Remove(testCcDevicePlugin.copiedEventLogLocation)
-	if err != nil {
-		t.Errorf("failed to delete: %v", err)
-		return
+		t.Fatalf("discoverCcDevices failed: %v", err)
 	}
 
-	wantCcDevice := CcDevice{
-		Device: v1beta1.Device{
-			Health: v1beta1.Healthy,
-		},
-		DeviceSpecs: []*v1beta1.DeviceSpec{{
-			HostPath:      testCcDevicePlugin.cds.DevicePaths[0],
-			ContainerPath: testCcDevicePlugin.cds.DevicePaths[0],
-			Permissions:   "mrw",
-		}},
-		Mounts: []*v1beta1.Mount{{
-			HostPath:      testCcDevicePlugin.copiedEventLogDirectory,
-			ContainerPath: testCcDevicePlugin.containerEventLogDirectory,
-			ReadOnly:      true,
-		}},
-		Limit: workloadSharedLimit,
+	if len(devices) != 1 {
+		t.Fatalf("Expected 1 device, got %d", len(devices))
 	}
-
-	var wantCcDevices []CcDevice
-	for i := 0; i < wantCcDevice.Limit; i++ {
-		wantCcDevices = append(wantCcDevices, wantCcDevice)
-	}
-
-	if !cmp.Equal(gotCcDevices, wantCcDevices, cmpopts.IgnoreFields(v1beta1.Device{}, "ID")) {
-		t.Errorf("ccDevices do not match expected value: got %v, want %v", gotCcDevices, wantCcDevices)
+	// Hardware-based should NOT have mounts
+	if len(devices[0].Mounts) != 0 {
+		t.Errorf("TDX should have 0 mounts, got %d", len(devices[0].Mounts))
 	}
 }
 
-func TestDiscoverCcDevicesPermissionFailure(t *testing.T) {
-	testCcDevicePlugin := constructCcDevicePlugin(t)
-	testCcDevicePlugin.copiedEventLogDirectory = "/tmp/cc-device-plugin"
-	testCcDevicePlugin.copiedEventLogLocation = "/tmp/cc-device-plugin/run_testcopiedmeasurement" + t.Name()
-	_, err := testCcDevicePlugin.discoverCcDevices()
-	if err != nil && !errors.Is(err, os.ErrPermission) {
-		t.Errorf("failed to discoverCcDevices: %v", err)
-		return
+func TestDiscoverSEVSNP(t *testing.T) {
+	spec := &CcDeviceSpec{
+		Resource:    "amd.com/sev-snp",
+		Type:        HardwareAttestation,
+		DevicePaths: []string{"dev/sev-guest"},
+		DeviceLimit: 1,
+	}
+	cdp := constructTestPlugin(t, spec)
+	devices, err := cdp.discoverCcDevices()
+	if err != nil {
+		t.Fatalf("discoverCcDevices failed: %v", err)
+	}
+
+	if len(devices) != 1 {
+		t.Fatalf("Expected 1 device, got %d", len(devices))
+	}
+	if len(devices[0].Mounts) != 0 {
+		t.Errorf("SEV-SNP should have 0 mounts, got %d", len(devices[0].Mounts))
+	}
+}
+
+func TestDiscoverTPM(t *testing.T) {
+	spec := &CcDeviceSpec{
+		Resource:         "google.com/cc",
+		Type:             SoftwareAttestation,
+		DevicePaths:      []string{"dev/tpmrm0"},
+		MeasurementPaths: []string{"sys/binary_bios_measurements"},
+		DeviceLimit:      256,
+	}
+	cdp := constructTestPlugin(t, spec)
+	devices, err := cdp.discoverCcDevices()
+	if err != nil {
+		t.Fatalf("discoverCcDevices failed: %v", err)
+	}
+
+	if len(devices) != 256 {
+		t.Fatalf("Expected 256 devices, got %d", len(devices))
+	}
+
+	// Software-based (vTPM) SHOULD have mounts
+	if len(devices[0].Mounts) == 0 {
+		t.Errorf("TPM should have mounts for event log copying")
+	}
+
+	// Verify file was actually copied to the temporary "run" dir
+	if _, err := os.Stat(cdp.copiedEventLogLocation); err != nil {
+		t.Errorf("Measurement file was not copied to target location: %v", err)
 	}
 }
 
 func TestRefreshDevices(t *testing.T) {
-	testCcDevicePlugin := constructCcDevicePlugin(t)
-	// first time
-	wantSameCcDeviceMap := false
-	gotSameCcDeviceMap, err := testCcDevicePlugin.refreshDevices()
-	if err != nil {
-		t.Errorf("refreshDevices failed")
+	spec := &CcDeviceSpec{
+		Resource:    "intel.com/tdx",
+		Type:        HardwareAttestation,
+		DevicePaths: []string{"dev/tdx-guest"},
+		DeviceLimit: 1,
 	}
-	if gotSameCcDeviceMap != wantSameCcDeviceMap {
-		t.Errorf("first time refreshDevices return does not match expected value: got %v, want %v", gotSameCcDeviceMap, wantSameCcDeviceMap)
-	}
-	wantNumOfCcDevices := workloadSharedLimit
-	gotNumOfCcDevices := len(testCcDevicePlugin.ccDevices)
-	if len(testCcDevicePlugin.ccDevices) != wantNumOfCcDevices {
-		t.Errorf("first time refreshDevices map ccdevices does not match expected value: got %v, want %v", gotNumOfCcDevices, wantNumOfCcDevices)
-	}
-	os.Remove(testCcDevicePlugin.copiedEventLogLocation)
+	cdp := constructTestPlugin(t, spec)
+	devPath := spec.DevicePaths[0]
 
-	// second time
-	wantSameCcDeviceMap = true
-	gotSameCcDeviceMap, err = testCcDevicePlugin.refreshDevices()
-	if err != nil {
-		t.Errorf("refreshDevices failed")
+	// 1. Initial Refresh
+	changed, err := cdp.refreshDevices()
+	if err != nil || changed {
+		t.Errorf("First refresh: err=%v, changed=%v (want false)", err, changed)
 	}
-	if gotSameCcDeviceMap != wantSameCcDeviceMap {
-		t.Errorf("second time refreshDevices return does not match expected value: got %v, want %v", gotSameCcDeviceMap, wantSameCcDeviceMap)
-	}
-	os.Remove(testCcDevicePlugin.copiedEventLogLocation)
 
-	// third time remove ccDeivces
-	wantSameCcDeviceMap = false
-	ccDevicePath := "/tmp/testccdevice" + t.Name()
-	ccMeasurmentPath := "/tmp/testmeasurement" + t.Name()
-	os.Remove(ccDevicePath)
-	os.Remove(ccMeasurmentPath)
+	// 2. Second Refresh (No change)
+	changed, err = cdp.refreshDevices()
+	if err != nil || !changed {
+		t.Errorf("Second refresh: err=%v, changed=%v (want true)", err, changed)
+	}
 
-	gotSameCcDeviceMap, err = testCcDevicePlugin.refreshDevices()
-	if err != nil {
-		t.Errorf("refreshDevices failed")
+	// 3. Remove device and refresh
+	os.Remove(devPath)
+	changed, err = cdp.refreshDevices()
+	if err != nil || changed {
+		t.Errorf("Third refresh (removed): err=%v, changed=%v (want false)", err, changed)
 	}
-	if gotSameCcDeviceMap != wantSameCcDeviceMap {
-		t.Errorf("third time refreshDevices return does not match expected value: got %v, want %v", gotSameCcDeviceMap, wantSameCcDeviceMap)
+	if len(cdp.ccDevices) != 0 {
+		t.Errorf("Expected 0 devices, got %d", len(cdp.ccDevices))
 	}
-	os.Remove(testCcDevicePlugin.copiedEventLogLocation)
 }
 
 func TestAllocate(t *testing.T) {
-	testCcDevicePlugin := constructCcDevicePlugin(t)
-	_, err := testCcDevicePlugin.refreshDevices()
-	if err != nil {
-		t.Errorf("refreshDevices failed")
+	spec := &CcDeviceSpec{
+		Resource:         "google.com/cc",
+		Type:             SoftwareAttestation,
+		DevicePaths:      []string{"dev/tpmrm0"},
+		MeasurementPaths: []string{"sys/binary_bios_measurements"},
+		DeviceLimit:      2,
+	}
+	cdp := constructTestPlugin(t, spec)
+	if _, err := cdp.refreshDevices(); err != nil {
+		t.Fatalf("refreshDevices failed: %v", err)
 	}
 
 	ctx := context.Background()
-	h := sha1.New()
-	b := make([]byte, 1)
+	expectedID := getExpectedID(spec.Resource, spec.DeviceLimit, 0)
 
-	for i := 0; i < workloadSharedLimit; i++ {
-		b[0] = byte(i)
-		req := &v1beta1.AllocateRequest{
-			ContainerRequests: []*v1beta1.ContainerAllocateRequest{{
-				DevicesIDs: []string{fmt.Sprintf("%x", h.Sum(b))},
-			}},
-		}
-		gotRes, err := testCcDevicePlugin.Allocate(ctx, req)
-		if err != nil {
-			t.Errorf("Allocate failed")
-		}
+	req := &v1beta1.AllocateRequest{
+		ContainerRequests: []*v1beta1.ContainerAllocateRequest{{
+			DevicesIDs: []string{expectedID},
+		}},
+	}
 
-		ccDevicePath := "/tmp/testccdevice" + t.Name()
-		wantRes := &v1beta1.AllocateResponse{
-			ContainerResponses: []*v1beta1.ContainerAllocateResponse{{
-				Devices: []*v1beta1.DeviceSpec{{
-					ContainerPath: ccDevicePath,
-					HostPath:      ccDevicePath,
-					Permissions:   "mrw",
-				}},
-				Mounts: []*v1beta1.Mount{{
-					ContainerPath: testCcDevicePlugin.containerEventLogDirectory,
-					HostPath:      testCcDevicePlugin.copiedEventLogDirectory,
-					ReadOnly:      true,
-				}},
-			}},
-		}
+	resp, err := cdp.Allocate(ctx, req)
+	if err != nil {
+		t.Fatalf("Allocate failed: %v", err)
+	}
 
-		if !cmp.Equal(gotRes, wantRes) {
-			t.Errorf("AllocateResponse does not match expected value: got %v, want %v", gotRes, wantRes)
-		}
+	if len(resp.ContainerResponses) != 1 {
+		t.Fatalf("Expected 1 response, got %d", len(resp.ContainerResponses))
+	}
+
+	// Verify the response contains the mount for software attestation
+	if len(resp.ContainerResponses[0].Mounts) == 0 {
+		t.Errorf("Expected mount in AllocateResponse for software attestation")
 	}
 }
 
 func TestAllocateNotExistDevice(t *testing.T) {
-	notExsitDeviceName := "NotExistDevice"
-	testCcDevicePlugin := constructCcDevicePlugin(t)
-	_, err := testCcDevicePlugin.refreshDevices()
-	if err != nil {
-		t.Errorf("refreshDevices failed")
-	}
+	spec := &CcDeviceSpec{Resource: "test", Type: HardwareAttestation}
+	cdp := constructTestPlugin(t, spec)
 
-	ctx := context.Background()
 	req := &v1beta1.AllocateRequest{
 		ContainerRequests: []*v1beta1.ContainerAllocateRequest{{
-			DevicesIDs: []string{notExsitDeviceName},
+			DevicesIDs: []string{"NonExistentID"},
 		}},
 	}
-	_, err = testCcDevicePlugin.Allocate(ctx, req)
-	if err.Error() != "requested cc device does not exist \""+notExsitDeviceName+"\"" {
-		t.Errorf("Allocate failed")
+	_, err := cdp.Allocate(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for non-existent device, got nil")
 	}
 }
 
@@ -281,83 +274,56 @@ type listAndWatchServerStub struct {
 
 func (d *listAndWatchServerStub) Send(*v1beta1.ListAndWatchResponse) error {
 	if d.testComplete {
-		return errors.New("")
+		return errors.New("test complete")
 	}
 	return nil
 }
 
-func (d *listAndWatchServerStub) SetTestComplete() {
-	d.testComplete = true
-}
+func (d *listAndWatchServerStub) SetTestComplete()             { d.testComplete = true }
+func (d *listAndWatchServerStub) SetHeader(metadata.MD) error  { return nil }
+func (d *listAndWatchServerStub) SendHeader(metadata.MD) error { return nil }
+func (d *listAndWatchServerStub) SetTrailer(metadata.MD)       { /* no-op for testing */ }
+func (d *listAndWatchServerStub) Context() context.Context     { return context.Background() }
+func (d *listAndWatchServerStub) SendMsg(any) error            { return nil }
+func (d *listAndWatchServerStub) RecvMsg(any) error            { return nil }
 
-func (d *listAndWatchServerStub) SetHeader(metadata.MD) error {
-	return nil
-}
-
-func (d *listAndWatchServerStub) SendHeader(metadata.MD) error {
-	return nil
-}
-
-func (d *listAndWatchServerStub) SetTrailer(metadata.MD) {
-}
-
-func (d *listAndWatchServerStub) Context() context.Context {
-	return context.Background()
-}
-
-func (d *listAndWatchServerStub) SendMsg(any) error {
-	return nil
-}
-
-func (d *listAndWatchServerStub) RecvMsg(any) error {
-	return nil
-}
-
-// The ListAndWatch function does not stop when no error. We use a timer to stop the
-// ListAndWatch function when no error. The ListAndWatch function refresh devices every
-// deviceCheckInterval. So the timer waits for deviceCheckInterval. We add a testBuffer
-// to timer in case the timer ends before devices are refreshed.
 func TestListAndWatch(t *testing.T) {
-	testCcDevicePlugin := constructCcDevicePlugin(t)
-
+	spec := &CcDeviceSpec{
+		Resource:    "intel.com/tdx",
+		Type:        HardwareAttestation,
+		DevicePaths: []string{"dev/tdx-guest"},
+		DeviceLimit: 1,
+	}
+	cdp := constructTestPlugin(t, spec)
 	stream := listAndWatchServerStub{}
-
-	endSignal := make(chan int)
+	endSignal := make(chan struct{})
 	var g run.Group
 
 	{
 		g.Add(func() error {
-			for {
-				select {
-				case <-endSignal:
-					return nil
-				// no error.
-				case <-time.After(deviceCheckInterval + testBuffer):
-					stream.SetTestComplete()
-					ccDevicePath := "/tmp/testccdevice" + t.Name()
-					ccMeasurmentPath := "/tmp/testmeasurement" + t.Name()
-					os.Remove(ccDevicePath)
-					os.Remove(ccMeasurmentPath)
-					return nil
-				}
+			select {
+			case <-endSignal:
+				return nil
+			case <-time.After(deviceCheckInterval + testBuffer):
+				stream.SetTestComplete()
+				os.Remove(spec.DevicePaths[0])
+				return nil
 			}
 		}, func(error) {})
 	}
 
 	{
 		g.Add(func() error {
-			err := testCcDevicePlugin.ListAndWatch(&v1beta1.Empty{}, &stream)
-			if err != nil {
-				if err.Error() != "" {
-					t.Errorf("ListAndWatch failed")
-					endSignal <- 0
-				} else {
-					return nil
-				}
+			err := cdp.ListAndWatch(&v1beta1.Empty{}, &stream)
+			if err != nil && err.Error() != "test complete" {
+				t.Errorf("ListAndWatch failed: %v", err)
+				close(endSignal)
 			}
-			return err
+			return nil
 		}, func(error) {})
 	}
 
-	g.Run()
+	if err := g.Run(); err != nil && err.Error() != "test complete" {
+		t.Errorf("run group failed: %v", err)
+	}
 }

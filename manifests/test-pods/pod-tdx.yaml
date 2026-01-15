@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: tdx-test-pod
+spec:
+  containers:
+  - name: test-container
+    image: alpine
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "Checking for TDX device..."
+        ls -l /dev/tdx*
+        echo "TDX container started successfully"
+        sleep 3600
+    resources:
+      limits:
+        intel.com/tdx: "1"
+      requests:
+        intel.com/tdx: "1"
+  nodeSelector:
+    cloud.google.com/gke-confidential-nodes-instance-type: TDX

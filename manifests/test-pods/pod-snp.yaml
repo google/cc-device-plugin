@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: snp-test-pod
+spec:
+  containers:
+  - name: test-container
+    image: alpine
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "Checking for SEV-SNP device..."
+        ls -l /dev/sev-guest
+        echo "SNP container started successfully"
+        sleep 3600
+    resources:
+      limits:
+        amd.com/sev-snp: "1"
+      requests:
+        amd.com/sev-snp: "1"
+  nodeSelector:
+    cloud.google.com/gke-confidential-nodes-instance-type: SEV_SNP

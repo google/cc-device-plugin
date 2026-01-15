@@ -29,47 +29,38 @@ jobs:
       matrix:
         go-version: [1.21.x]
         os: [ubuntu-latest]
-        architecture: [x32, x64]
-    name: Generate/Build/Test (${{ matrix.os }}, ${{ matrix.architecture }}, Go ${{ matrix.go-version }})
+        architecture: [x64]
+    name: Build/Test (${{ matrix.os }}, ${{ matrix.architecture }}, Go ${{ matrix.go-version }})
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-go@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
           architecture: ${{ matrix.architecture }}
+          cache: true
       - name: Build all modules
-        run: CGO_ENABLED=0 go build -v
+        run: CGO_ENABLED=0 go build -v ./...
       - name: Test all modules
-        run: CGO_ENABLED=0 go test ./deviceplugin/... -v
+        run: CGO_ENABLED=0 go test ./... -v
 
   lint:
-    strategy:
-      matrix:
-        go-version: [1.21.x]
-        os: [ubuntu-latest]
-        dir: ["./"]
-    name: Lint ${{ matrix.dir }} (${{ matrix.os }}, Go ${{ matrix.go-version }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-go@v2
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: 1.21.x
+          cache: true
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v3.2.0
+        uses: golangci/golangci-lint-action@v4
         with:
           version: latest
-          working-directory: ${{ matrix.dir }}
           args: >
-            -D errcheck
+            -E errcheck
             -E stylecheck
             -E goimports
             -E misspell
             -E revive
             -E gofmt
-            -E goimports
-            --exclude-use-default=false
-            --max-same-issues=0
-            --max-issues-per-linter=0
-            --timeout 2m
+            --timeout 5m

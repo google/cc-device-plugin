@@ -165,7 +165,9 @@ func TestRegisterWithKublet(t *testing.T) {
 		}, func(error) {})
 	}
 
-	g.Run()
+	if err := g.Run(); err != nil && err.Error() != "test complete" {
+		t.Errorf("run group failed: %v", err)
+	}
 }
 
 func maybeLogError(f func() error, message string) {

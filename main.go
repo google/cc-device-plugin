@@ -17,7 +17,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"net"
 	"net/http"
@@ -26,7 +25,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
@@ -62,22 +60,43 @@ var (
 
 // Main is the principal function for the binary, wrapped only by `main` for convenience.
 func Main() error {
-	ccResource := "google.com/cc"
-	ccDevicePaths := []string{"/dev/tpmrm0"}
-	ccMeasurmentPaths := []string{"/sys/kernel/security/tpm0/binary_bios_measurements"}
+	// We create a list of specs, one for each device type.
+	allDeviceSpecs := []*deviceplugin.CcDeviceSpec{
+		{
+			// vTPM for standard Confidential VMs
+			Resource:         "google.com/cc",
+			Type:             deviceplugin.SoftwareAttestation, // Explicitly marked as software
+			DevicePaths:      []string{"/dev/tpmrm0"},
+			MeasurementPaths: []string{"/sys/kernel/security/tpm0/binary_bios_measurements"},
+			DeviceLimit:      256, // Allow multiple pods to share the vTPM
+		},
+		{
+			// Intel TDX
+			Resource:    "intel.com/tdx",
+			Type:        deviceplugin.HardwareAttestation,             // Explicitly marked as hardware
+			DevicePaths: []string{"/dev/tdx-guest", "/dev/tdx_guest"}, // Some kernels use different names
+			// TDX does not have a separate measurement file, attestation is done via ioctl.
+			MeasurementPaths: []string{},
+			DeviceLimit:      1, // Only one container can use the TDX device at a time per node
+		},
+		{
+			// AMD SEV-SNP
+			Resource:    "amd.com/sev-snp",
+			Type:        deviceplugin.HardwareAttestation, // Explicitly marked as hardware
+			DevicePaths: []string{"/dev/sev-guest"},
+			// SEV-SNP also uses ioctl for attestation.
+			MeasurementPaths: []string{},
+			DeviceLimit:      1, // Only one container can use the SEV-SNP device at a time per node
+		},
+	}
 
 	devicePluginPath := v1beta1.DevicePluginPath
+	socketPrefix := "cc-device-plugin"
 
 	// by default, only track warning and error log
 	logLevel := flag.String("log-level", logLevelWarn, fmt.Sprintf("Log level available values: %s", availableLogLevels))
 	listen := flag.String("listen", ":8080", "The listening port for health and metrics.")
 	flag.Parse()
-
-	ccDeviceSpec := &deviceplugin.CcDeviceSpec{
-		Resource:         ccResource,
-		DevicePaths:      ccDevicePaths,
-		MeasurementPaths: ccMeasurmentPaths,
-	}
 
 	logger := log.NewJSONLogger(log.NewSyncWriter(os.Stdout))
 	switch *logLevel {
@@ -105,9 +124,21 @@ func Main() error {
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
 
+	// Defer socket cleanup
+	defer func() {
+		_ = level.Info(logger).Log("msg", "Cleaning up potential socket files")
+		for _, spec := range allDeviceSpecs {
+			safeResourceName := strings.ReplaceAll(spec.Resource, "/", "-")
+			socketPath := filepath.Join(devicePluginPath, fmt.Sprintf("%s-%s.sock", socketPrefix, safeResourceName))
+			if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+				_ = level.Warn(logger).Log("msg", "Failed to remove socket file", "path", socketPath, "error", err)
+			}
+		}
+	}()
+
 	var g run.Group
 	{
-		// Run the HTTP server.
+		// Run the HTTP server for metrics and health checks.
 		mux := http.NewServeMux()
 		mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -137,7 +168,7 @@ func Main() error {
 			for {
 				select {
 				case <-term:
-					logger.Log("msg", "caught interrupt; gracefully cleaning up; see you next time!")
+					_ = level.Info(logger).Log("msg", "caught interrupt; gracefully cleaning up; see you next time!")
 					return nil
 				case <-cancel:
 					return nil
@@ -151,22 +182,41 @@ func Main() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	socketPrefix := "cc-device-plugin"
-	socket := filepath.Join(devicePluginPath, fmt.Sprintf("%s-%s-%d.sock", socketPrefix, base64.StdEncoding.EncodeToString([]byte(ccResource)), time.Now().Unix()))
-	tp, err := deviceplugin.NewCcDevicePlugin(ccDeviceSpec, devicePluginPath, socket, log.With(logger, "resource", ccDeviceSpec.Resource), prometheus.WrapRegistererWith(prometheus.Labels{"resource": ccDeviceSpec.Resource}, r))
-	if err != nil {
+	pluginCreationErrors := false
+	// The run.Group `g` will manage all of them concurrently.
+	for _, spec := range allDeviceSpecs {
+		// Use a local variable for the spec in the closure
+		ccDeviceSpec := spec
+		safeResourceName := strings.ReplaceAll(ccDeviceSpec.Resource, "/", "-")
+		socket := filepath.Join(devicePluginPath, fmt.Sprintf("%s-%s.sock", socketPrefix, safeResourceName))
+
+		// Create a new device plugin instance for the current device spec
+		p, err := deviceplugin.NewCcDevicePlugin(ccDeviceSpec, devicePluginPath, socket, log.With(logger, "resource", ccDeviceSpec.Resource), prometheus.WrapRegistererWith(prometheus.Labels{"resource": ccDeviceSpec.Resource}, r))
+		if err != nil {
+			_ = level.Error(logger).Log("msg", "Failed to create new device plugin", "resource", ccDeviceSpec.Resource, "error", err)
+			pluginCreationErrors = true // Mark that at least one plugin failed
+			continue
+		}
+
+		// Add the device plugin server to the run.Group
+		g.Add(func() error {
+			_ = level.Info(logger).Log("msg", "Starting the cc-device-plugin", "resource", ccDeviceSpec.Resource)
+			return p.Run(ctx)
+		}, func(error) {
+			// This will be called on shutdown, ensuring the context is cancelled for this plugin instance.
+			cancel()
+		})
+	}
+
+	if err := g.Run(); err != nil {
 		return err
 	}
 
-	// Start the cc device plugin server.
-	g.Add(func() error {
-		logger.Log("msg", fmt.Sprintf("Starting the cc-device-plugin for %q.", ccDeviceSpec.Resource))
-		return tp.Run(ctx)
-	}, func(error) {
-		cancel()
-	})
+	if pluginCreationErrors {
+		return fmt.Errorf("one or more device plugins failed to initialize")
+	}
 
-	return g.Run()
+	return nil
 }
 
 func main() {

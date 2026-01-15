@@ -102,7 +102,7 @@ Outer:
 			err := p.runOnce(ctx)
 			if err != nil {
 				lastErrorTime = time.Now()
-				level.Warn(p.logger).Log("msg", "encountered error while running plugin", "err", err)
+				_ = level.Warn(p.logger).Log("msg", "encountered error while running plugin", "err", err)
 				select {
 				case <-ctx.Done():
 					break Outer
@@ -129,7 +129,7 @@ Outer:
 // This makes it convenient to run in a run.Group.
 func (p *plugin) serve(ctx context.Context) (func() error, func(error), error) {
 	// Run the gRPC server.
-	level.Info(p.logger).Log("msg", "listening on Unix socket", "socket", p.socket)
+	_ = level.Info(p.logger).Log("msg", "listening on Unix socket", "socket", p.socket)
 	l, err := net.Listen("unix", p.socket)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to listen on Unix socket %q: %v", p.socket, err)
@@ -137,7 +137,7 @@ func (p *plugin) serve(ctx context.Context) (func() error, func(error), error) {
 
 	ch := make(chan error)
 	go func() {
-		level.Info(p.logger).Log("msg", "starting gRPC server")
+		_ = level.Info(p.logger).Log("msg", "starting gRPC server")
 		ch <- p.grpcServer.Serve(l)
 		close(ch)
 	}()
@@ -148,7 +148,7 @@ Outer:
 		for range p.grpcServer.GetServiceInfo() {
 			break Outer
 		}
-		level.Info(p.logger).Log("msg", "waiting for gRPC server to be ready")
+		_ = level.Info(p.logger).Log("msg", "waiting for gRPC server to be ready")
 		select {
 		case <-ctx.Done():
 			return nil, nil, ctx.Err()
@@ -164,7 +164,7 @@ Outer:
 			// Drain the channel to clean up.
 			<-ch
 			if err := l.Close(); err != nil {
-				level.Warn(p.logger).Log("msg", "encountered error while closing the listener", "err", err)
+				_ = level.Warn(p.logger).Log("msg", "encountered error while closing the listener", "err", err)
 			}
 		}, nil
 }
@@ -190,7 +190,7 @@ func (p *plugin) runOnce(ctx context.Context) error {
 		ctx, cancel := context.WithCancel(ctx)
 		g.Add(func() error {
 			defer cancel()
-			level.Info(p.logger).Log("msg", "waiting for the gRPC server to be ready")
+			_ = level.Info(p.logger).Log("msg", "waiting for the gRPC server to be ready")
 			c, err := grpc.DialContext(ctx, p.socket, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock(),
 				grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
 					return (&net.Dialer{}).DialContext(ctx, "unix", addr)
@@ -202,11 +202,11 @@ func (p *plugin) runOnce(ctx context.Context) error {
 			if err := c.Close(); err != nil {
 				return fmt.Errorf("failed to close connection to local gRPC server: %v", err)
 			}
-			level.Info(p.logger).Log("msg", "the gRPC server is ready")
+			_ = level.Info(p.logger).Log("msg", "the gRPC server is ready")
 			if err := p.registerWithKubelet(); err != nil {
 				return fmt.Errorf("failed to register with kubelet: %v", err)
 			}
-			level.Info(p.logger).Log("msg", "the registration is complete")
+			_ = level.Info(p.logger).Log("msg", "the registration is complete")
 			<-ctx.Done()
 			return nil
 		}, func(error) {
@@ -239,7 +239,7 @@ func (p *plugin) runOnce(ctx context.Context) error {
 }
 
 func (p *plugin) registerWithKubelet() error {
-	level.Info(p.logger).Log("msg", "registering plugin with kubelet")
+	_ = level.Info(p.logger).Log("msg", "registering plugin with kubelet")
 	conn, err := grpc.Dial(filepath.Join(p.pluginDir, p.kubeSocketBase), grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
 			d := &net.Dialer{}

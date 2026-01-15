@@ -15,7 +15,7 @@ this plugin deployed in your Kubernetes cluster, you will be able to run jobs
 * This plugin targets Kubernetes v1.18+.
 
 ## Deployment
-The device plugin needs to be run on all the nodes that are equipped with Confidential Computing devices (e.g. TPM).  The simplest way of doing so is to create a Kubernetes [DaemonSet][dp], which run a copy of a pod on all (or some) Nodes in the cluster.  We have a pre-built Docker image on [Goolge Artifact Registry][release] that you can use for with your DaemonSet.  This repository also have a pre-defined yaml file named `cc-device-plugin.yaml`.  You can create a DaemonSet in your Kubernetes cluster by running this command:
+The device plugin needs to be run on all the nodes that are equipped with Confidential Computing devices (e.g. TPM).  The simplest way of doing so is to create a Kubernetes [DaemonSet][dp], which run a copy of a pod on all (or some) Nodes in the cluster.  We have a pre-built Docker image on [Google Artifact Registry][release] that you can use for with your DaemonSet.  This repository also have a pre-defined yaml file named `cc-device-plugin.yaml`.  You can create a DaemonSet in your Kubernetes cluster by running this command:
 
 ```
 kubectl create -f manifests/cc-device-plugin.yaml
