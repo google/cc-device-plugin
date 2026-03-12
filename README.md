@@ -23,8 +23,12 @@ This plugin supports the following technologies on GKE:
 *   For TDX, ensure the node pool uses Intel TDX machine types.
 
 ## Limitations
-*   This plugin targets Kubernetes v1.18+.
-*   Refer to [Confidential VM Supported Configurations](https://cloud.google.com/confidential-computing/confidential-vm/docs/supported-configurations)
+This plugin targets Kubernetes v1.18+ for AMD SEV. For other Confidential
+Computing technologies, the minimum required GKE versions (when using Ubuntu
+node images) are branch-dependent:
+*   **AMD SEV-SNP:** v1.33.5-gke.1350000+ or v1.34.1-gke.2037000+
+*   **Intel TDX:** v1.33.5-gke.1697000+ or v1.34.1-gke.2909000+
+*   Refer to [Confidential VM Supported Configurations][supported-configs]
     for specific version and region availability.
 
 
@@ -54,3 +58,4 @@ kubectl create -f https://raw.githubusercontent.com/google/cc-device-plugin/main
 [sevsnp]: https://cloud.google.com/confidential-computing/confidential-vm/docs/confidential-vm-overview#amd_sev-snp
 [tdx]: https://cloud.google.com/blog/products/identity-security/confidential-vms-on-intel-cpus-your-datas-new-intelligent-defense
 [release]: https://us-central1-docker.pkg.dev/gce-confidential-compute/release/cc-device-plugin
+[supported-configs]: https://cloud.google.com/confidential-computing/confidential-vm/docs/supported-configurations
