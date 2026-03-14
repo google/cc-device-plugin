@@ -5,14 +5,17 @@
 
 This is a [Kubernetes][k8s] [device plugin][dp] implementation that enables
 the registration of Confidential Computing devices in a Google Kubernetes
-Engine (GKE) cluster for compute workloads. With the appropriate GKE setup
-and this plugin deployed, your Kubernetes cluster will be able to run jobs
-(e.g., Attestation) that require Confidential Computing devices.
+Engine (GKE) cluster for compute workloads. With the appropriate
+[GKE setup][gke-cc-docs] and this plugin deployed, your Kubernetes cluster
+will be able to run jobs (e.g., Attestation) that require Confidential
+Computing devices.
 
 This plugin supports the following technologies on GKE:
-*   **vTPM / AMD SEV:** Exposes `google.com/cc` resource.
-*   **AMD SEV-SNP:** Exposes `amd.com/sev-snp` resource. Requires AMD SNP machines.
-*   **Intel TDX:** Exposes `intel.com/tdx` resource. Requires Intel TDX machines.
+* **vTPM / AMD SEV:** Exposes `google.com/cc` resource.
+* **AMD SEV-SNP:** Exposes `amd.com/sev-snp` resource. Requires AMD SNP
+    machines.
+* **Intel TDX:** Exposes `intel.com/tdx` resource. Requires Intel TDX
+    machines.
 
 ## Prerequisites
 *   A GKE cluster with node pools configured to support the desired
@@ -75,9 +78,8 @@ spec:
     cloud.google.com/gke-confidential-nodes-instance-type: "TDX"
     cloud.google.com/machine-family: "c3"
 ```
-Inside this container, `/dev/tdx_guest` will be available for interacting with the Intel Trust Domain.
-
-**Example: Requesting vTPM / AMD SEV**
+Inside this container, `/dev/tdx_guest` will be available for interacting
+with the Intel Trust Domain.
 
 **Example: Requesting AMD SEV-SNP**
 
@@ -98,7 +100,10 @@ spec:
     cloud.google.com/gke-confidential-nodes-instance-type: "SEV_SNP"
     cloud.google.com/machine-family: "n2d"
 ```
-Inside this container, `/dev/sev-guest` will be available for interacting with the AMD Secure Processor.
+Inside this container, `/dev/sev-guest` will be available for interacting
+with the AMD Secure Processor.
+
+**Example: Requesting vTPM / AMD SEV**
 
 ```yaml
 apiVersion: v1
