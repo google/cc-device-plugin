@@ -191,15 +191,11 @@ func (p *plugin) runOnce(ctx context.Context) error {
 		g.Add(func() error {
 			defer cancel()
 			_ = level.Info(p.logger).Log("msg", "waiting for the gRPC server to be ready")
-			c, err := grpc.DialContext(ctx, p.socket, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock(),
-				grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-					return (&net.Dialer{}).DialContext(ctx, "unix", addr)
-				}),
-			)
+			conn, err := (&net.Dialer{}).DialContext(ctx, "unix", p.socket)
 			if err != nil {
 				return fmt.Errorf("failed to create connection to local gRPC server: %v", err)
 			}
-			if err := c.Close(); err != nil {
+			if err := conn.Close(); err != nil {
 				return fmt.Errorf("failed to close connection to local gRPC server: %v", err)
 			}
 			_ = level.Info(p.logger).Log("msg", "the gRPC server is ready")
@@ -240,11 +236,7 @@ func (p *plugin) runOnce(ctx context.Context) error {
 
 func (p *plugin) registerWithKubelet() error {
 	_ = level.Info(p.logger).Log("msg", "registering plugin with kubelet")
-	conn, err := grpc.Dial(filepath.Join(p.pluginDir, p.kubeSocketBase), grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			d := &net.Dialer{}
-			return d.DialContext(ctx, "unix", addr)
-		}))
+	conn, err := grpc.NewClient("unix://"+filepath.Join(p.pluginDir, p.kubeSocketBase), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return fmt.Errorf("failed to connect to kubelet: %v", err)
 	}
