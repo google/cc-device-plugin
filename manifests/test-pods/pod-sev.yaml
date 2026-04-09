@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sev-test-pod
+spec:
+  containers:
+  - name: test-container
+    image: alpine
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "Checking for vTPM device..."
+        ls -l /dev/tpmrm0
+        echo "SEV (vTPM) container started successfully"
+        sleep 3600
+    resources:
+      limits:
+        google.com/cc: "1"
+      requests:
+        google.com/cc: "1"
+  nodeSelector:
+    cloud.google.com/gke-confidential-nodes-instance-type: SEV
