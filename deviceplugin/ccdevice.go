@@ -47,8 +47,6 @@ const (
 	HardwareAttestation AttestationType = "hardware" // e.g., Intel TDX, AMD SEV-SNP
 )
 
-
-
 // CcDeviceSpec defines a cc device type and the paths at which
 // it can be found.
 type CcDeviceSpec struct {
