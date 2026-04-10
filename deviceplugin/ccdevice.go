@@ -47,9 +47,7 @@ const (
 	HardwareAttestation AttestationType = "hardware" // e.g., Intel TDX, AMD SEV-SNP
 )
 
-var (
-	measurementFileLastUpdate time.Time
-)
+
 
 // CcDeviceSpec defines a cc device type and the paths at which
 // it can be found.
@@ -78,6 +76,8 @@ type CcDevicePlugin struct {
 	containerEventLogDirectory string
 	// this lock prevents data race when kubelet sends multiple requests at the same time
 	mu sync.Mutex
+
+	measurementFileLastUpdate time.Time
 
 	// metrics
 	deviceGauge        prometheus.Gauge
@@ -191,19 +191,21 @@ func (cdp *CcDevicePlugin) discoverCcDevices() ([]CcDevice, error) {
 				ReadOnly:      true,
 			})
 
-			fileInfo, err := os.Stat(cdp.copiedEventLogLocation)
-			if errors.Is(err, os.ErrNotExist) {
-				if err := copyMeasurementFile(foundMeasurementPath, cdp.copiedEventLogLocation); err != nil {
+			srcInfo, err := os.Stat(foundMeasurementPath)
+			if err != nil {
+				_ = level.Error(cdp.logger).Log("msg", "failed to stat measurement file", "error", err)
+				return nil, err
+			}
+
+			_, err = os.Stat(cdp.copiedEventLogLocation)
+			destNotExist := errors.Is(err, os.ErrNotExist)
+
+			if destNotExist || srcInfo.ModTime().After(cdp.measurementFileLastUpdate) {
+				if err := cdp.copyMeasurementFile(foundMeasurementPath, cdp.copiedEventLogLocation); err != nil {
 					_ = level.Error(cdp.logger).Log("msg", "failed to copy measurement file", "error", err)
 					return nil, err
 				}
-			} else if err == nil && fileInfo.ModTime().After(measurementFileLastUpdate) {
-				// Refresh the copy if the source file has been updated by the kernel since the last copy.
-				if err := copyMeasurementFile(foundMeasurementPath, cdp.copiedEventLogLocation); err != nil {
-					_ = level.Error(cdp.logger).Log("msg", "failed to re-copy measurement file", "error", err)
-					return nil, err
-				}
-			} else if err != nil {
+			} else if err != nil && !destNotExist {
 				_ = level.Error(cdp.logger).Log("msg", "failed to stat copied measurement file", "error", err)
 				return nil, err
 			}
@@ -231,7 +233,7 @@ func (cdp *CcDevicePlugin) discoverCcDevices() ([]CcDevice, error) {
 	return ccDevices, nil
 }
 
-func copyMeasurementFile(src string, dest string) error {
+func (cdp *CcDevicePlugin) copyMeasurementFile(src string, dest string) error {
 	// get time for src
 	sourceInfo, err := os.Stat(src)
 	if err != nil {
@@ -251,7 +253,7 @@ func copyMeasurementFile(src string, dest string) error {
 	if err != nil {
 		return err
 	}
-	measurementFileLastUpdate = sourceInfo.ModTime()
+	cdp.measurementFileLastUpdate = sourceInfo.ModTime()
 	return nil
 }
 
@@ -354,24 +356,40 @@ func (cdp *CcDevicePlugin) ListAndWatch(_ *v1beta1.Empty, stream v1beta1.DeviceP
 		return err
 	}
 
+	res := new(v1beta1.ListAndWatchResponse)
+	cdp.mu.Lock()
+	for _, dev := range cdp.ccDevices {
+		res.Devices = append(res.Devices, &v1beta1.Device{ID: dev.ID, Health: dev.Health})
+	}
+	cdp.mu.Unlock()
+
+	if err := stream.Send(res); err != nil {
+		_ = level.Error(cdp.logger).Log("msg", "failed to send ListAndWatchResponse", "error", err)
+		return err
+	}
+
 	for {
-		res := new(v1beta1.ListAndWatchResponse)
-		cdp.mu.Lock()
-		for _, dev := range cdp.ccDevices {
-			res.Devices = append(res.Devices, &v1beta1.Device{ID: dev.ID, Health: dev.Health})
-		}
-		cdp.mu.Unlock()
+		select {
+		case <-stream.Context().Done():
+			_ = level.Info(cdp.logger).Log("msg", "ListAndWatch stream closed")
+			return stream.Context().Err()
+		case <-time.After(deviceCheckInterval):
+			if _, err := cdp.refreshDevices(); err != nil {
+				_ = level.Error(cdp.logger).Log("msg", "error during device refresh", "error", err)
+				// Don't return error immediately, try to continue
+			}
 
-		if err := stream.Send(res); err != nil {
-			_ = level.Error(cdp.logger).Log("msg", "failed to send ListAndWatchResponse", "error", err)
-			return err
-		}
+			res := new(v1beta1.ListAndWatchResponse)
+			cdp.mu.Lock()
+			for _, dev := range cdp.ccDevices {
+				res.Devices = append(res.Devices, &v1beta1.Device{ID: dev.ID, Health: dev.Health})
+			}
+			cdp.mu.Unlock()
 
-		<-time.After(deviceCheckInterval)
-
-		if _, err := cdp.refreshDevices(); err != nil {
-			_ = level.Error(cdp.logger).Log("msg", "error during device refresh", "error", err)
-			// Don't return error immediately, try to continue
+			if err := stream.Send(res); err != nil {
+				_ = level.Error(cdp.logger).Log("msg", "failed to send ListAndWatchResponse", "error", err)
+				return err
+			}
 		}
 	}
 }

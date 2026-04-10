@@ -101,20 +101,25 @@ Outer:
 		default:
 			err := p.runOnce(ctx)
 			if err != nil {
-				lastErrorTime = time.Now()
 				_ = level.Warn(p.logger).Log("msg", "encountered error while running plugin", "err", err)
+
+				// If the last error was a long time ago, reset the restart count.
+				// We define "long time" as longer than the max potential restart window.
+				cooldownPeriod := maxRestartTimes * restartInterval
+				if time.Since(lastErrorTime) > cooldownPeriod {
+					restartCount = 0
+				}
+
+				lastErrorTime = time.Now()
+
 				select {
 				case <-ctx.Done():
 					break Outer
 				case <-time.After(restartInterval):
 					p.restartsTotal.Inc()
 					restartCount++
-					if restartCount == maxRestartTimes {
-						return err
-					}
-					// if restart success within maxRestartInterval, then reset restartCount
-					if time.Now().Add(-maxRestartTimes * restartInterval).After(lastErrorTime) {
-						restartCount = 0
+					if restartCount >= maxRestartTimes {
+						return fmt.Errorf("plugin crashed %d times consecutively: %v", restartCount, err)
 					}
 				}
 			}

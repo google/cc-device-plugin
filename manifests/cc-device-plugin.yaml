@@ -34,7 +34,7 @@ spec:
       - operator: "Exists"
         effect: "NoSchedule"
       containers:
-      - image: us-central1-docker.pkg.dev/gce-confidential-compute/release/cc-device-plugin:v1.1.2
+      - image: us-central1-docker.pkg.dev/jimmychiu-test-project1/cc-plugin-dev/cc-device-plugin:v1-tdx-snp
         imagePullPolicy: Always
         name: cc-device-plugin
         resources:
