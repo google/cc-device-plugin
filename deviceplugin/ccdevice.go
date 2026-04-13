@@ -366,6 +366,11 @@ func (cdp *CcDevicePlugin) ListAndWatch(_ *v1beta1.Empty, stream v1beta1.DeviceP
 		return err
 	}
 
+	// This loop periodically refreshes the list of CC devices and sends the updated
+	// list to the kubelet.
+	// It exits when:
+	// - The stream context is canceled (e.g., client disconnects).
+	// - An error occurs when sending the updated device list.
 	for {
 		select {
 		case <-stream.Context().Done():
