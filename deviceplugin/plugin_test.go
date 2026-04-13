@@ -28,7 +28,6 @@ import (
 	"github.com/oklog/run"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"k8s.io/klog/v2"
 	"k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 )
@@ -180,19 +179,19 @@ func maybeLogError(f func() error, message string) {
 // by making grpc blocking connection to the server socket.
 func waitForServer(socket string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-
 	defer cancel()
 
-	conn, err := grpc.DialContext(ctx, socket,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock(),
-		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", addr)
-		}),
-	)
-	if conn != nil {
-		conn.Close()
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.Wrapf(ctx.Err(), "Failed to connect to server at %s within timeout", socket)
+		default:
+			conn, err := net.Dial("unix", socket)
+			if err == nil {
+				conn.Close()
+				return nil
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
 	}
-
-	return errors.Wrapf(err, "Failed dial context at %s", socket)
 }

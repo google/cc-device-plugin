@@ -208,12 +208,12 @@ func Main() error {
 		})
 	}
 
-	if err := g.Run(); err != nil {
-		return err
-	}
-
 	if pluginCreationErrors {
 		return fmt.Errorf("one or more device plugins failed to initialize")
+	}
+
+	if err := g.Run(); err != nil {
+		return err
 	}
 
 	return nil
