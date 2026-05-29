@@ -45,6 +45,8 @@ const (
 	logLevelWarn  = "warn"
 	logLevelError = "error"
 	logLevelNone  = "none"
+	// By default, GKE allows up to 110 Pods per node on Standard clusters. Standard clusters can be configured to allow up to 256 Pods per node.
+	workloadSharedLimit = 256
 )
 
 var (
@@ -68,7 +70,7 @@ func Main() error {
 			Type:             deviceplugin.SoftwareAttestation, // Explicitly marked as software
 			DevicePaths:      []string{"/dev/tpmrm0"},
 			MeasurementPaths: []string{"/sys/kernel/security/tpm0/binary_bios_measurements"},
-			DeviceLimit:      256, // Allow multiple pods to share the vTPM
+			DeviceLimit:      workloadSharedLimit,
 		},
 		{
 			// Intel TDX
@@ -77,7 +79,7 @@ func Main() error {
 			DevicePaths: []string{"/dev/tdx-guest", "/dev/tdx_guest"}, // Some kernels use different names
 			// TDX does not have a separate measurement file, attestation is done via ioctl.
 			MeasurementPaths: []string{},
-			DeviceLimit:      1, // Only one container can use the TDX device at a time per node
+			DeviceLimit:      workloadSharedLimit,
 		},
 		{
 			// AMD SEV-SNP
@@ -86,7 +88,7 @@ func Main() error {
 			DevicePaths: []string{"/dev/sev-guest"},
 			// SEV-SNP also uses ioctl for attestation.
 			MeasurementPaths: []string{},
-			DeviceLimit:      1, // Only one container can use the SEV-SNP device at a time per node
+			DeviceLimit:      workloadSharedLimit,
 		},
 	}
 
