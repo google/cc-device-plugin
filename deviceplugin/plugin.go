@@ -156,6 +156,10 @@ Outer:
 		_ = level.Info(p.logger).Log("msg", "waiting for gRPC server to be ready")
 		select {
 		case <-ctx.Done():
+			p.grpcServer.Stop()
+			if err := l.Close(); err != nil {
+				_ = level.Warn(p.logger).Log("msg", "encountered error while closing the listener during shutdown", "err", err)
+			}
 			return nil, nil, ctx.Err()
 		case <-t.C:
 			t.Reset(1 * time.Second)

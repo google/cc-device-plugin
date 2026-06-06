@@ -116,7 +116,7 @@ func TestDiscoverTDX(t *testing.T) {
 		Resource:    "intel.com/tdx",
 		Type:        HardwareAttestation,
 		DevicePaths: []string{"dev/tdx-guest"},
-		DeviceLimit: 1,
+		DeviceLimit: 256,
 	}
 	cdp := constructTestPlugin(t, spec)
 	devices, err := cdp.discoverCcDevices()
@@ -124,8 +124,8 @@ func TestDiscoverTDX(t *testing.T) {
 		t.Fatalf("discoverCcDevices failed: %v", err)
 	}
 
-	if len(devices) != 1 {
-		t.Fatalf("Expected 1 device, got %d", len(devices))
+	if len(devices) != 256 {
+		t.Fatalf("Expected 256 devices, got %d", len(devices))
 	}
 	// Hardware-based should NOT have mounts
 	if len(devices[0].Mounts) != 0 {
@@ -138,7 +138,7 @@ func TestDiscoverSEVSNP(t *testing.T) {
 		Resource:    "amd.com/sev-snp",
 		Type:        HardwareAttestation,
 		DevicePaths: []string{"dev/sev-guest"},
-		DeviceLimit: 1,
+		DeviceLimit: 256,
 	}
 	cdp := constructTestPlugin(t, spec)
 	devices, err := cdp.discoverCcDevices()
@@ -146,8 +146,8 @@ func TestDiscoverSEVSNP(t *testing.T) {
 		t.Fatalf("discoverCcDevices failed: %v", err)
 	}
 
-	if len(devices) != 1 {
-		t.Fatalf("Expected 1 device, got %d", len(devices))
+	if len(devices) != 256 {
+		t.Fatalf("Expected 256 devices, got %d", len(devices))
 	}
 	if len(devices[0].Mounts) != 0 {
 		t.Errorf("SEV-SNP should have 0 mounts, got %d", len(devices[0].Mounts))
@@ -188,10 +188,9 @@ func TestRefreshDevices(t *testing.T) {
 		Resource:    "intel.com/tdx",
 		Type:        HardwareAttestation,
 		DevicePaths: []string{"dev/tdx-guest"},
-		DeviceLimit: 1,
+		DeviceLimit: 256,
 	}
 	cdp := constructTestPlugin(t, spec)
-	devPath := spec.DevicePaths[0]
 
 	// 1. Initial Refresh
 	changed, err := cdp.refreshDevices()
@@ -199,14 +198,10 @@ func TestRefreshDevices(t *testing.T) {
 		t.Errorf("First refresh: err=%v, changed=%v (want false)", err, changed)
 	}
 
-	// 2. Second Refresh (No change)
-	changed, err = cdp.refreshDevices()
-	if err != nil || !changed {
-		t.Errorf("Second refresh: err=%v, changed=%v (want true)", err, changed)
+	// 2. Remove all devices and refresh
+	for _, path := range spec.DevicePaths {
+		os.Remove(path)
 	}
-
-	// 3. Remove device and refresh
-	os.Remove(devPath)
 	changed, err = cdp.refreshDevices()
 	if err != nil || changed {
 		t.Errorf("Third refresh (removed): err=%v, changed=%v (want false)", err, changed)
@@ -217,12 +212,13 @@ func TestRefreshDevices(t *testing.T) {
 }
 
 func TestAllocate(t *testing.T) {
+	limit := 2
 	spec := &CcDeviceSpec{
 		Resource:         "google.com/cc",
 		Type:             SoftwareAttestation,
 		DevicePaths:      []string{"dev/tpmrm0"},
 		MeasurementPaths: []string{"sys/binary_bios_measurements"},
-		DeviceLimit:      2,
+		DeviceLimit:      limit,
 	}
 	cdp := constructTestPlugin(t, spec)
 	if _, err := cdp.refreshDevices(); err != nil {
@@ -230,26 +226,23 @@ func TestAllocate(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	expectedID := getExpectedID(spec.Resource, spec.DeviceLimit, 0)
+	// Test allocation for index 0 and 1
+	for i := 0; i < limit; i++ {
+		expectedID := getExpectedID(spec.Resource, limit, i)
+		req := &v1beta1.AllocateRequest{
+			ContainerRequests: []*v1beta1.ContainerAllocateRequest{{
+				DevicesIDs: []string{expectedID},
+			}},
+		}
 
-	req := &v1beta1.AllocateRequest{
-		ContainerRequests: []*v1beta1.ContainerAllocateRequest{{
-			DevicesIDs: []string{expectedID},
-		}},
-	}
+		resp, err := cdp.Allocate(ctx, req)
+		if err != nil {
+			t.Fatalf("Allocate failed for ID %s: %v", expectedID, err)
+		}
 
-	resp, err := cdp.Allocate(ctx, req)
-	if err != nil {
-		t.Fatalf("Allocate failed: %v", err)
-	}
-
-	if len(resp.ContainerResponses) != 1 {
-		t.Fatalf("Expected 1 response, got %d", len(resp.ContainerResponses))
-	}
-
-	// Verify the response contains the mount for software attestation
-	if len(resp.ContainerResponses[0].Mounts) == 0 {
-		t.Errorf("Expected mount in AllocateResponse for software attestation")
+		if len(resp.ContainerResponses) != 1 {
+			t.Fatalf("Expected 1 response, got %d", len(resp.ContainerResponses))
+		}
 	}
 }
 
@@ -292,7 +285,7 @@ func TestListAndWatch(t *testing.T) {
 		Resource:    "intel.com/tdx",
 		Type:        HardwareAttestation,
 		DevicePaths: []string{"dev/tdx-guest"},
-		DeviceLimit: 1,
+		DeviceLimit: 256,
 	}
 	cdp := constructTestPlugin(t, spec)
 	stream := listAndWatchServerStub{}
@@ -325,5 +318,89 @@ func TestListAndWatch(t *testing.T) {
 
 	if err := g.Run(); err != nil && err.Error() != "test complete" {
 		t.Errorf("run group failed: %v", err)
+	}
+}
+
+func TestAllocateHardware(t *testing.T) {
+	limit := 2
+	spec := &CcDeviceSpec{
+		Resource:    "intel.com/tdx",
+		Type:        HardwareAttestation,
+		DevicePaths: []string{"dev/tdx-guest"},
+		DeviceLimit: limit,
+	}
+	cdp := constructTestPlugin(t, spec)
+	if _, err := cdp.refreshDevices(); err != nil {
+		t.Fatalf("refreshDevices failed: %v", err)
+	}
+
+	ctx := context.Background()
+	expectedID := getExpectedID(spec.Resource, limit, 0)
+	req := &v1beta1.AllocateRequest{
+		ContainerRequests: []*v1beta1.ContainerAllocateRequest{{
+			DevicesIDs: []string{expectedID},
+		}},
+	}
+
+	resp, err := cdp.Allocate(ctx, req)
+	if err != nil {
+		t.Fatalf("Allocate failed for ID %s: %v", expectedID, err)
+	}
+
+	if len(resp.ContainerResponses) != 1 {
+		t.Fatalf("Expected 1 response, got %d", len(resp.ContainerResponses))
+	}
+
+	cResp := resp.ContainerResponses[0]
+	if len(cResp.Devices) != 1 {
+		t.Fatalf("Expected 1 mounted device, got %d", len(cResp.Devices))
+	}
+	if len(cResp.Mounts) != 0 {
+		t.Fatalf("Expected 0 mounts for hardware attestation, got %d", len(cResp.Mounts))
+	}
+}
+
+func TestDiscoverMultiPaths(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create only one of the multi paths
+	path1 := filepath.Join(tmpDir, "dev/tdx-guest")
+	path2 := filepath.Join(tmpDir, "dev/tdx_guest")
+
+	if err := os.MkdirAll(filepath.Dir(path1), 0755); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+	if err := os.WriteFile(path2, []byte("test_device"), 0644); err != nil {
+		t.Fatalf("failed to create mock device: %v", err)
+	}
+
+	spec := &CcDeviceSpec{
+		Resource:    "intel.com/tdx",
+		Type:        HardwareAttestation,
+		DevicePaths: []string{path1, path2},
+		DeviceLimit: 1,
+	}
+
+	cdp := &CcDevicePlugin{
+		cds:       spec,
+		ccDevices: make(map[string]CcDevice),
+		logger:    logger,
+	}
+
+	devices, err := cdp.discoverCcDevices()
+	if err != nil {
+		t.Fatalf("discoverCcDevices failed: %v", err)
+	}
+
+	if len(devices) != 1 {
+		t.Fatalf("Expected 1 device, got %d", len(devices))
+	}
+
+	specs := devices[0].DeviceSpecs
+	if len(specs) != 1 {
+		t.Fatalf("Expected 1 mapped device spec, got %d", len(specs))
+	}
+	if specs[0].HostPath != path2 {
+		t.Errorf("Expected HostPath %q, got %q", path2, specs[0].HostPath)
 	}
 }

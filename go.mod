@@ -1,8 +1,6 @@
 module github.com/google/cc-device-plugin
 
-go 1.24.0
-
-toolchain go1.24.13
+go 1.26
 
 require (
 	github.com/go-kit/log v0.2.1
