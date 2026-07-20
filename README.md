@@ -123,6 +123,19 @@ spec:
 ```
 Inside this container, `/dev/tpmrm0` will be available.
 
+## Monitoring
+
+Applying the Prometheus monitoring manifest allows you to observe the device plugin status:
+
+```bash
+kubectl apply -f manifests/cc-device-plugin-pod-monitoring.yaml
+```
+
+You can view the metrics in the [Cloud Monitoring Metrics Explorer](https://console.cloud.google.com/monitoring/metrics-explorer) using PromQL, for example to see CPU usage:
+```promql
+rate(process_cpu_seconds_total[5m])
+```
+
 [dp]: https://kubernetes.io/docs/concepts/cluster-administration/device-plugins/
 [k8s]: https://kubernetes.io
 [tpm]: https://cloud.google.com/compute/shielded-vm/docs/shielded-vm#vtpm
