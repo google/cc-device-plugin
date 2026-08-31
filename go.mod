@@ -7,7 +7,7 @@ require (
 	github.com/oklog/run v1.1.0
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.17.0
-	github.com/spf13/pflag v1.0.5
+	github.com/spf13/pflag v1.0.10
 	google.golang.org/grpc v1.79.3
 	k8s.io/klog/v2 v2.100.1
 	k8s.io/kubelet v0.28.2
