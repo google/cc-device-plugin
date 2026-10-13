@@ -1,4 +1,4 @@
-FROM golang:1.26.8-trixie as build
+FROM golang:1.26.9-trixie as build
 WORKDIR /src
 COPY . /src
 RUN CGO_ENABLED=0 go build -o /cc-device-plugin
