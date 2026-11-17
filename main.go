@@ -24,7 +24,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
@@ -151,8 +153,9 @@ func Main() error {
 			return fmt.Errorf("failed to listen on %s: %v", *listen, err)
 		}
 
+		srv := newHTTPServer(mux)
 		g.Add(func() error {
-			if err := http.Serve(l, mux); err != nil && err != http.ErrServerClosed {
+			if err := srv.Serve(l); err != nil && err != http.ErrServerClosed {
 				return fmt.Errorf("server exited unexpectedly: %v", err)
 			}
 			return nil
@@ -219,6 +222,42 @@ func Main() error {
 	}
 
 	return nil
+}
+
+// Limits for the health/metrics HTTP server. Legitimate traffic is a Prometheus
+// scrape every 30s plus optional health checks, so these leave ample headroom.
+// The idle timeout exceeds the scrape interval so scrapers can reuse connections.
+const (
+	httpReadHeaderTimeout = 2 * time.Second
+	httpIdleTimeout       = 60 * time.Second
+	httpMaxHeaderBytes    = 8 << 10
+	httpMaxConns          = 64
+)
+
+// newHTTPServer returns the server for the health and metrics endpoints.
+// The listener is reachable by any pod in the cluster, so per-connection cost is
+// bounded to keep an unauthenticated client from exhausting the plugin's small
+// memory limit (Slowloris): stalled request headers time out, header size is
+// capped, and connections beyond httpMaxConns are closed right away without
+// blocking the accept loop.
+func newHTTPServer(handler http.Handler) *http.Server {
+	var conns atomic.Int64
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		IdleTimeout:       httpIdleTimeout,
+		MaxHeaderBytes:    httpMaxHeaderBytes,
+		ConnState: func(c net.Conn, state http.ConnState) {
+			switch state {
+			case http.StateNew:
+				if conns.Add(1) > httpMaxConns {
+					_ = c.Close()
+				}
+			case http.StateHijacked, http.StateClosed:
+				conns.Add(-1)
+			}
+		},
+	}
 }
 
 func main() {
