@@ -10,7 +10,13 @@ updates:
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "daily"
+    # Stay on the current Go minor. A minor upgrade also needs CI changes.
+    ignore:
+      - dependency-name: "golang"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
 
   # 3. GitHub Actions updates
   - package-ecosystem: "github-actions"
